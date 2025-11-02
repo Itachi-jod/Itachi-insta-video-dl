@@ -1,40 +1,87 @@
+const express = require("express");
 const axios = require("axios");
+const app = express();
 
-module.exports = async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ success: false, error: "Missing ?url query" });
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-  // Remove query params
-  const cleanUrl = url.split("?")[0];
+// Function to extract direct video URL from Instatik HTML
+function extractVideoUrl(html) {
+  // Match all dl.php?url=ENCODED_URL
+  const matches = [...html.matchAll(/<a[^>]+href="dl\.php\?url=([^"]+)"/g)];
+  if (!matches || matches.length === 0) return null;
 
-  // Match p, reel, or tv shortcode
-  const match = cleanUrl.match(/\/(p|reel|tv)\/([^\/]+)/);
-  if (!match) return res.status(400).json({ success: false, error: "Invalid Instagram URL" });
+  // Take the last one (for Stories/Reels with multiple videos)
+  const encodedUrl = matches[matches.length - 1][1];
+  return decodeURIComponent(encodedUrl); // decode to get full direct URL
+}
 
-  const shortcode = match[2];
+// POST endpoint for Instagram download
+app.post("/download", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ status: false, message: "URL is required" });
 
   try {
-    const graphURL = `https://www.instagram.com/graphql/query/?doc_id=8845758582119845&variables={"shortcode":"${shortcode}"}`;
+    const response = await axios.post(
+      "https://instatik.app/core/ajax.php",
+      new URLSearchParams({ url, host: "instagram" }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+          "User-Agent": "Mozilla/5.0"
+        }
+      }
+    );
 
-    const response = await axios.get(graphURL, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "application/json",
-      },
-    });
+    const html = response.data;
+    const videoUrl = extractVideoUrl(html);
 
-    const media = response.data?.data?.xdt_shortcode_media;
-    if (!media) return res.status(404).json({ success: false, error: "Media not found" });
+    if (!videoUrl) return res.status(404).json({ status: false, message: "Video not found" });
 
-    res.json({
-      success: true,
-      author: "ItachiXD",
-      platform: "instagram",
-      url: media.video_url || media.display_url || null,
-    });
+    res.json({ status: true, url: videoUrl });
+
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ success: false, error: "Failed to fetch Instagram media" });
+    console.error("Axios error:", err.message);
+    res.status(500).json({ status: false, message: "Failed to fetch video" });
   }
-};
+});
+
+// GET endpoint for browser testing
+app.get("/download", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ status: false, message: "URL is required" });
+
+  try {
+    const response = await axios.post(
+      "https://instatik.app/core/ajax.php",
+      new URLSearchParams({ url, host: "instagram" }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+          "User-Agent": "Mozilla/5.0"
+        }
+      }
+    );
+
+    const html = response.data;
+    const videoUrl = extractVideoUrl(html);
+
+    if (!videoUrl) return res.status(404).json({ status: false, message: "Video not found" });
+
+    res.json({ status: true, url: videoUrl });
+
+  } catch (err) {
+    console.error("Axios error:", err.message);
+    res.status(500).json({ status: false, message: "Failed to fetch video" });
+  }
+});
+
+// Health check
+app.get("/", (req, res) => res.send("Instagram Video API is running"));
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+~/insta-api $
